@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # Redis 消息代理
+  redis:
+    image: redis:7-alpine
+    container_name: tracker_redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitor_network
+
+  # 盤中監控掃描器 — 停用：改用 run_local.ps1 在本機統一跑
+  # scanner（現貨）+ taifex_fetcher（股期）+ morning_runner + gui 都應在本機執行，
+  # 避免與本機 process 同時寫入 Redis 造成資料衝突（曾導致 index_contrib 忽 0 忽正常）。
+  # 若日後要改回 Docker 版，記得 taifex_fetcher 目前並未納入 docker-compose 管理。
+  # scanner:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: monitor_scanner
+  #   environment:
+  #     REDIS_HOST: redis
+  #     REDIS_PORT: 6379
+  #     REDIS_DB: ${REDIS_DB:-0}
+  #     INFLUX_URL: http://influxdb:8086
+  #     INFLUX_TOKEN: mytoken123
+  #     INFLUX_ORG: stocks
+  #     INFLUX_BUCKET: intraday
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #     influxdb:
+  #       condition: service_started
+  #   volumes:
+  #     - ./monitor:/app/monitor
+  #     - ./logs:/app/logs
+  #     - ./data:/app/data
+  #   networks:
+  #     - monitor_network
+  #   command: python monitor/scanner.py --interval ${SCANNER_INTERVAL:-60}
+  #   restart: "no"
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: monitor_influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+      DOCKER_INFLUXDB_INIT_ORG: stocks
+      DOCKER_INFLUXDB_INIT_BUCKET: intraday
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: mytoken123
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - monitor_network
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: monitor_grafana
+    ports:
+      - "23001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - influxdb
+    networks:
+      - monitor_network
+
+volumes:
+  redis_data:
+  influxdb_data:
+  grafana_data:
+
+networks:
+  monitor_network:
+    driver: bridge
